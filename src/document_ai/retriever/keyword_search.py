@@ -4,20 +4,11 @@ from langchain_chroma import Chroma
 
 from document_ai.config import COLLECTION_NAME, VECTOR_DB_DIR
 
-
 class KeywordSearcher:
     """
-    Lightweight lexical search over the chunks stored in Chroma.
-
-    This is intentionally simple and dependency-light. It is useful for exact
-    terms such as model names, IDs, equations, or unique phrases.
+    BM25 lexical search over the chunks stored in Chroma.
+    Uses rank-bm25 to accurately score keyword relevance via TF-IDF.
     """
-
-    STOPWORDS = {
-        "the", "a", "an", "is", "are", "was", "were", "what", "which",
-        "who", "how", "why", "when", "where", "of", "to", "in", "on",
-        "for", "and", "or", "with", "from", "by", "about", "does", "do",
-    }
 
     def __init__(self):
         self.vector_store = Chroma(
@@ -27,40 +18,44 @@ class KeywordSearcher:
 
     @staticmethod
     def _tokens(text: str) -> list[str]:
-        tokens = re.findall(r"\b[\w.-]+\b", text.lower())
-        return [t for t in tokens if t not in KeywordSearcher.STOPWORDS]
+        # Simple lowercase tokenization
+        return re.findall(r"\b[\w.-]+\b", text.lower())
 
     def search(self, query: str, k: int = 20) -> list[dict[str, Any]]:
-        # Chroma can return all stored text/metadata. This is appropriate for
-        # a small-to-medium project collection; a real large-scale system
-        # should replace this with BM25/Elasticsearch/OpenSearch.
+        try:
+            from rank_bm25 import BM25Okapi
+        except ImportError:
+            raise ImportError("rank-bm25 is not installed. Run: pip install rank-bm25")
+            
         data = self.vector_store.get(include=["documents", "metadatas"])
+        documents = data.get("documents", [])
+        metadatas = data.get("metadatas", [])
+        
+        if not documents:
+            return []
 
-        query_tokens = set(self._tokens(query))
+        # Tokenize corpus for BM25
+        tokenized_corpus = [self._tokens(doc or "") for doc in documents]
+        bm25 = BM25Okapi(tokenized_corpus)
+        
+        tokenized_query = self._tokens(query)
+        if not tokenized_query:
+            return []
+            
+        # Get BM25 scores
+        scores = bm25.get_scores(tokenized_query)
+        
         scored = []
-
-        for content, metadata in zip(
-            data.get("documents", []),
-            data.get("metadatas", []),
-        ):
-            doc_tokens = set(self._tokens(content or ""))
-            if not query_tokens:
-                continue
-
-            overlap = len(query_tokens & doc_tokens)
-            if overlap == 0:
-                continue
-
-            # Jaccard-like lexical score.
-            score = overlap / len(query_tokens | doc_tokens)
-            scored.append(
-                {
-                    "content": content,
-                    "metadata": metadata or {},
-                    "score": float(score),
-                    "retrieval_method": "keyword",
-                }
-            )
+        for doc, meta, score in zip(documents, metadatas, scores):
+            if score > 0.0:  # Only include hits
+                scored.append(
+                    {
+                        "content": doc,
+                        "metadata": meta or {},
+                        "score": float(score),
+                        "retrieval_method": "keyword (bm25)",
+                    }
+                )
 
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[:k]
