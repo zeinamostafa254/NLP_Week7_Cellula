@@ -17,7 +17,7 @@ Usage:
 
 import argparse
 import sys
-
+from document_ai.logger import setup_logging
 
 def cmd_ingest(paths: list[str]):
     from document_ai.ingestion.pipeline import ingest_files
@@ -34,7 +34,7 @@ def cmd_query(question: str, max_loops: int = 3):
     from document_ai.answer.agent import AnswerAgent
     from document_ai.orchestrator.orchestrator import Orchestrator
 
-    print(f"\n🔍 Question: {question}\n")
+    print(f"\n--- Question: {question}\n")
     retriever = RetrieverAgent()
     set_retriever_callback(retriever.retrieve)
     analyst = AnalystAgent(retriever_callback=retriever.retrieve)
@@ -47,14 +47,15 @@ def cmd_query(question: str, max_loops: int = 3):
     print(result.answer)
     print("=" * 60)
     if result.sources:
-        print("\n📚 Sources:")
+        print("\n--- Sources:")
         print(result.sources)
-    print(f"\n📊 Confidence: {result.confidence:.0%} | "
+    print(f"\n--- Confidence: {result.confidence:.0%} | "
           f"Evidence: {result.metadata.get('evidence_count','?')} chunks | "
           f"Loops: {result.metadata.get('iterations','?')}")
 
 
 def main():
+    setup_logging()
     parser = argparse.ArgumentParser(description="Document AI Assistant CLI")
     sub = parser.add_subparsers(dest="command")
 

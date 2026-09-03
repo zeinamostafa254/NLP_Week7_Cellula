@@ -4,6 +4,7 @@ from typing import Iterable
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
 
+import logging
 from document_ai.config import COLLECTION_NAME, VECTOR_DB_DIR
 from document_ai.ingestion.loader import load_file, load_directory
 from document_ai.ingestion.parser import parse_documents
@@ -11,9 +12,11 @@ from document_ai.ingestion.cleaner import clean_documents
 from document_ai.ingestion.chunker import chunk_documents
 from document_ai.ingestion.embedder import get_embedding_model
 
+logger = logging.getLogger(__name__)
 
 def build_vector_store(chunks: list[Document]) -> Chroma:
     """Persist document chunks and their embeddings into Chroma."""
+    logger.info(f"[Ingestion] Building vector store for {len(chunks)} chunks...")
     embeddings = get_embedding_model()
 
     if not chunks:
@@ -33,6 +36,7 @@ def build_vector_store(chunks: list[Document]) -> Chroma:
     )
 
     vector_store.add_documents(documents=chunks, ids=ids)
+    logger.info(f"[Ingestion] Successfully persisted to Chroma at {VECTOR_DB_DIR}")
     return vector_store
 
 
@@ -41,11 +45,16 @@ def ingest_files(paths: Iterable[str | Path]) -> dict:
     raw_documents: list[Document] = []
 
     for path in paths:
+        logger.info(f"[Ingestion] Loading file: {path}")
         raw_documents.extend(load_file(path))
 
+    logger.info(f"[Ingestion] Parsing {len(raw_documents)} raw documents...")
     parsed = parse_documents(raw_documents)
+    logger.info("[Ingestion] Cleaning documents...")
     cleaned = clean_documents(parsed)
+    logger.info("[Ingestion] Chunking documents...")
     chunks = chunk_documents(cleaned)
+    logger.info(f"[Ingestion] Generated {len(chunks)} chunks.")
     vector_store = build_vector_store(chunks)
 
     return {

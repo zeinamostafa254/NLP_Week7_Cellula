@@ -93,15 +93,15 @@ def test_assemble_response_contains_sources():
     response = assemble_response(
         "PaperA.pdf is great.",
         citations,
-        "Which paper is better?",
     )
     assert "**Sources:**" in response
-    assert "[1]" in response
+    assert "[1] PaperA.pdf" in response
+    assert "page 3" in response
 
 
 def test_assemble_response_doc_marker():
     citations = build_citations(SAMPLE_EVIDENCE)
-    response = assemble_response("PaperA.pdf achieved 92%.", citations, "q")
+    response = assemble_response("PaperA.pdf achieved 92%.", citations)
     assert "PaperA.pdf[1]" in response
 
 

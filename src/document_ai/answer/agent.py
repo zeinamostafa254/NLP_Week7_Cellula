@@ -24,6 +24,9 @@ from document_ai.answer.citation_formatter import build_citations, format_citati
 from document_ai.answer.source_formatter import build_sources, format_sources
 from document_ai.answer.response_formatter import assemble_response, format_response
 
+import logging
+logger = logging.getLogger(__name__)
+
 # All tools the Answer Agent LLM can call
 ANSWER_TOOLS = [format_citations, format_sources, format_response]
 
@@ -92,10 +95,12 @@ class AnswerAgent:
             messages.append(response)
 
             if not response.tool_calls:
+                logger.info("    [Answer] LLM produced final text (no more tool calls).")
                 final_answer_text = response.content or final_answer_text
                 break
 
             for tc in response.tool_calls:
+                logger.info(f"    [Answer] LLM called tool: '{tc['name']}'")
                 fn = self._tool_map.get(tc["name"])
                 result = fn.invoke(tc["args"]) if fn else "Tool not found."
                 messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
@@ -116,7 +121,7 @@ class AnswerAgent:
         if not sources_text:
             sources_text = build_sources(citations_raw)
         if not final_answer_text:
-            final_answer_text = assemble_response(analysis_text, citations_raw, question)
+            final_answer_text = assemble_response(analysis_text, citations_raw)
 
         # Build pydantic Citation objects
         citations = [

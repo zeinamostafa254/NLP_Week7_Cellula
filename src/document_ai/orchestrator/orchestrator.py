@@ -53,6 +53,9 @@ class AgentState(TypedDict):
     max_loops: int
 
 
+import logging
+logger = logging.getLogger(__name__)
+
 class OrchestratorGraph:
     """
     LangGraph orchestration — explicit typed graph with conditional edges.
@@ -86,6 +89,7 @@ class OrchestratorGraph:
     def _retrieve_node(self, state: AgentState) -> AgentState:
         question = state["analyst_result"].follow_up_query or state["question"] \
             if state.get("analyst_result") else state["question"]
+        logger.info(f"[Orchestrator] -> Running RetrieverNode for query: '{question}'")
         bundle = self._retriever.retrieve(
             query=question,
             filters=state.get("filters") or {},
@@ -93,6 +97,7 @@ class OrchestratorGraph:
         return {**state, "evidence_bundle": bundle}
 
     def _analyze_node(self, state: AgentState) -> AgentState:
+        logger.info(f"[Orchestrator] -> Running AnalyzeNode (Loop {state['loop_count'] + 1})")
         result = self._analyst.analyze(
             question=state["question"],
             evidence_bundle=state["evidence_bundle"],
@@ -104,6 +109,7 @@ class OrchestratorGraph:
         }
 
     def _answer_node(self, state: AgentState) -> AgentState:
+        logger.info("[Orchestrator] -> Running AnswerNode")
         final = self._answer.answer(
             question=state["question"],
             analyst_result=state["analyst_result"],
@@ -118,7 +124,9 @@ class OrchestratorGraph:
             result.status == "need_more_evidence"
             and state["loop_count"] < state["max_loops"]
         ):
+            logger.info("[Orchestrator] Routing back to 'retrieve' (need_more_evidence)")
             return "retrieve"
+        logger.info(f"[Orchestrator] Routing to 'answer' (status={result.status}, loop={state['loop_count']})")
         return "answer"
 
     # ── Graph assembly ──────────────────────────────────────────────
@@ -137,10 +145,11 @@ class OrchestratorGraph:
             {"retrieve": "retrieve", "answer": "answer"},
         )
         graph.add_edge("answer", END)
-
         return graph.compile()
 
+
     def run(self, question: str, filters: Optional[Dict[str, Any]] = None, max_loops: int = 3) -> FinalAnswer:
+        logger.info(f"--- Starting Orchestrator Pipeline (max_loops={max_loops}) ---")
         initial_state: AgentState = {
             "question": question,
             "filters": filters or {},

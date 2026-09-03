@@ -10,6 +10,9 @@ from document_ai.retriever.reranker import Reranker
 from document_ai.retriever.context_selector import ContextSelector
 
 
+import logging
+logger = logging.getLogger(__name__)
+
 class RetrieverAgent:
     """
     End-to-end Retriever Agent.
@@ -62,15 +65,19 @@ class RetrieverAgent:
         chat_history: str = "",
         filters: dict[str, Any] | None = None,
     ) -> EvidenceBundle:
+        logger.info(f"    [Retriever] Original query: '{query}'")
         rewritten = self.query_rewriter.rewrite(query, chat_history)
+        logger.info(f"    [Retriever] Rewritten query: '{rewritten}'")
 
         semantic_results = self.semantic_search.search(rewritten, k=RETRIEVAL_K)
         keyword_results = self.keyword_search.search(rewritten, k=RETRIEVAL_K)
+        logger.info(f"    [Retriever] Found {len(semantic_results)} semantic hits, {len(keyword_results)} keyword hits")
 
         merged = self._merge_results(semantic_results, keyword_results)
         filtered = filter_results(merged, filters)
         reranked = self.reranker.rerank(rewritten, filtered, top_k=RETRIEVAL_K)
         selected = self.context_selector.select(reranked, k=FINAL_K)
+        logger.info(f"    [Retriever] After merge, filter, and rerank -> returning {len(selected)} chunks")
 
         evidence = [
             Evidence(

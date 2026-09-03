@@ -1,6 +1,7 @@
-from openai import OpenAI
 import os
+
 from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
@@ -16,10 +17,10 @@ OPENROUTER_MODEL = os.getenv(
 
 # Lazy client — only instantiated on first get_llm() call so that
 # importing this module in tests (without a real API key) does not crash.
-_client: OpenAI | None = None
+_client: ChatOpenAI | None = None
 
 
-def get_llm() -> OpenAI:
+def get_llm() -> ChatOpenAI:
     global _client
     if _client is None:
         if not OPENROUTER_API_KEY:
@@ -27,12 +28,13 @@ def get_llm() -> OpenAI:
                 "OPENROUTER_API_KEY is not set. "
                 "Add it to your .env file before running the full pipeline."
             )
-        _client = OpenAI(
+        _client = ChatOpenAI(
             api_key=OPENROUTER_API_KEY,
             base_url=OPENROUTER_BASE_URL,
+            model=OPENROUTER_MODEL,
         )
     return _client
 
 
 def get_model_name() -> str:
-    return OPENROUTER_MODEL
+    return OPENROUTER_MODEL

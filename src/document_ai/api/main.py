@@ -31,6 +31,11 @@ from document_ai.analyst.retrieve_more import set_retriever_callback
 from document_ai.answer.agent import AnswerAgent
 from document_ai.orchestrator.orchestrator import Orchestrator
 from document_ai.schemas.answer import FinalAnswer
+from document_ai.logger import setup_logging
+import logging
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Document AI Assistant",
@@ -88,6 +93,17 @@ class DocumentListResponse(BaseModel):
 
 # ── Endpoints ──────────────────────────────────────────────────────────
 
+@app.get("/", tags=["System"])
+def root():
+    """Root status endpoint."""
+    return {
+        "status": "online",
+        "message": "Document AI Assistant API is running.",
+        "docs_url": "/docs",
+        "health_url": "/health",
+    }
+
+
 @app.get("/health", tags=["System"])
 def health_check():
     """Liveness check."""
@@ -101,8 +117,10 @@ async def ingest_documents(files: List[UploadFile] = File(...)):
     ingestion pipeline (load → parse → clean → chunk → embed → store).
     """
     if not files:
+        logger.warning("Ingest called with no files.")
         raise HTTPException(status_code=400, detail="No files provided.")
 
+    logger.info(f"Starting ingestion for {len(files)} files: {[f.filename for f in files]}")
     saved_paths: List[Path] = []
     try:
         for upload in files:
@@ -113,6 +131,7 @@ async def ingest_documents(files: List[UploadFile] = File(...)):
             saved_paths.append(tmp)
 
         result = ingest_files(saved_paths)
+        logger.info(f"Ingestion successful: {result['chunks']} chunks created.")
         return IngestResponse(
             status="success",
             files_ingested=len(saved_paths),
@@ -138,8 +157,10 @@ def query(request: QueryRequest):
     Returns a FinalAnswer with the response text, inline citations, and bibliography.
     """
     if not request.question.strip():
+        logger.warning("Query called with empty question.")
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
+    logger.info(f"Received query: '{request.question}' (max_loops={request.max_loops})")
     try:
         orch = _get_orchestrator()
         answer: FinalAnswer = orch.run(
@@ -147,6 +168,7 @@ def query(request: QueryRequest):
             filters=request.filters,
             max_loops=request.max_loops,
         )
+        logger.info(f"Query completed successfully. Confidence: {answer.confidence:.2f}")
         return answer
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
