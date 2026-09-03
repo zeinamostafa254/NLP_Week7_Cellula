@@ -15,7 +15,7 @@ from langchain_core.tools import tool
 
 
 @tool
-def format_response(analysis: str, citations_json: str, question: str) -> str:
+def format_response(analysis: str, citations_json: str) -> str:
     """
     Produce the final answer text by inserting inline citation markers into
     the analysis and appending a Sources section.
@@ -63,7 +63,7 @@ def format_response(analysis: str, citations_json: str, question: str) -> str:
 
 
 # ── Raw function for direct use inside AnswerAgent ──
-def assemble_response(analysis: str, citations: List[Dict[str, Any]], question: str) -> str:
+def assemble_response(analysis: str, citations: List[Dict[str, Any]]) -> str:
     """Direct (non-tool) version for internal AnswerAgent use."""
     doc_ref_map = {c["doc"]: f"[{c['ref_id']}]" for c in citations}
     formatted = analysis

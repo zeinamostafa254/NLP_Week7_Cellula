@@ -44,7 +44,6 @@ def rewrite_query(
 ) -> RewrittenQuery:
 
     client = get_llm()
-    model = get_model_name()
 
     user_prompt = f"""
 Conversation context:
@@ -54,28 +53,26 @@ User question:
 {query}
 """
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ],
-        temperature=0,
-        response_format={
-            "type": "json_object"
-        },
-    )
+    # We need to tell the model to return JSON. We can use bind() if supported, or just trust the system prompt.
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
 
-    content = response.choices[0].message.content
+    response = client.invoke(messages)
+    content = response.content
 
     try:
-        data = json.loads(content)
+        # Sometimes LLMs wrap JSON in markdown blocks
+        clean_content = content.strip()
+        if clean_content.startswith("```json"):
+            clean_content = clean_content[7:]
+        if clean_content.startswith("```"):
+            clean_content = clean_content[3:]
+        if clean_content.endswith("```"):
+            clean_content = clean_content[:-3]
+            
+        data = json.loads(clean_content.strip())
         return RewrittenQuery.model_validate(data)
 
     except Exception:

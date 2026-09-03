@@ -43,6 +43,9 @@ from document_ai.analyst.evidence_assessment import Assessment, AssessmentConfig
 from document_ai.analyst.retrieve_more import MockRetrieverCallback, RetrieveMoreTool
 from document_ai.analyst.table_extractor import TableExtractor, extract_tables_from_text
 
+import logging
+logger = logging.getLogger(__name__)
+
 # All tools the Analyst LLM can call
 ANALYST_TOOLS = [
     calculate_expression,
@@ -114,19 +117,27 @@ class AnalystAgent:
 
         while True:
             iterations += 1
+            logger.info(f"    [Analyst] Assessment loop {iterations}")
             assessment: Assessment = self.assessor.assess(question, evidence)
 
-            if assessment.enough_evidence or iterations >= self.max_iterations:
+            if assessment.enough_evidence:
+                logger.info(f"    [Analyst] -> 'enough_evidence'. Running LLM tool loop...")
+                return self._run_tool_loop(question, evidence, assessment, iterations)
+            elif iterations >= self.max_iterations:
+                logger.info(f"    [Analyst] -> Max iterations reached. Forcing LLM tool loop.")
                 return self._run_tool_loop(question, evidence, assessment, iterations)
 
+            logger.info(f"    [Analyst] -> 'need_more_evidence' (Missing: {assessment.missing_information})")
             # Feedback loop: ask Retriever for more evidence
             new_evidence = self.retrieve_more.request_more_evidence(
                 assessment.suggested_follow_up_query or question
             )
             if not new_evidence:
+                logger.warning("    [Analyst] Retriever found no additional evidence. Stopping loop.")
                 # Retriever had nothing more — stop looping
                 return self._run_tool_loop(question, evidence, assessment, iterations)
 
+            logger.info(f"    [Analyst] Retrieved {len(new_evidence)} additional chunks.")
             evidence = _merge_evidence(evidence, new_evidence)
 
     # ------------------------------------------------------------------
@@ -138,6 +149,7 @@ class AnalystAgent:
         iterations: int,
     ) -> AnalystResult:
         """Run the LLM tool-calling loop and return an AnalystResult."""
+        logger.info(f"    [Analyst] Calling LLM tools (turns_allowed={self.max_tool_turns})")
         if not assessment.enough_evidence:
             # Give the LLM what we have, but note the evidence was thin
             status = "need_more_evidence"
