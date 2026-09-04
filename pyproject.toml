@@ -28,4 +28,5 @@ dependencies = [
     "python-multipart>=0.0.20",
     "streamlit>=1.45.0",
     "httpx>=0.28.0",
+    "pypdf>=6.16.2",
 ]
