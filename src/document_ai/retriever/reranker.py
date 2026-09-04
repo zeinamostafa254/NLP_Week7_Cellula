@@ -1,16 +1,28 @@
+import logging
 from typing import Any
-import math
-import re
 
+logger = logging.getLogger(__name__)
 
 class Reranker:
     """
-    Dependency-light lexical reranker.
-
-    It combines the initial retrieval score with exact query-term coverage.
-    This provides a real second ranking stage without requiring another paid
-    API call. It can later be replaced by a CrossEncoder or hosted reranker.
+    CrossEncoder Reranker.
+    Uses BAAI/bge-reranker-base to accurately score the relevance of retrieved chunks.
     """
+    
+    def __init__(self, model_name: str = "BAAI/bge-reranker-base"):
+        self.model_name = model_name
+        self._model = None
+        
+    def _get_model(self):
+        if self._model is None:
+            logger.info(f"    [Reranker] Loading CrossEncoder model: {self.model_name}...")
+            try:
+                from sentence_transformers import CrossEncoder
+                self._model = CrossEncoder(self.model_name)
+            except ImportError:
+                logger.error("    [Reranker] sentence-transformers not installed.")
+                raise
+        return self._model
 
     def rerank(
         self,
@@ -18,24 +30,21 @@ class Reranker:
         results: list[dict[str, Any]],
         top_k: int = 20,
     ) -> list[dict[str, Any]]:
-        query_terms = set(re.findall(r"\b[\w.-]+\b", query.lower()))
-        if not query_terms:
-            return results[:top_k]
-
+        if not results:
+            return []
+            
+        model = self._get_model()
+        pairs = [[query, item.get("content", "")] for item in results]
+        
+        # predict returns a list of float scores
+        scores = model.predict(pairs)
+        
         reranked = []
-        for item in results:
-            text_terms = set(
-                re.findall(r"\b[\w.-]+\b", item.get("content", "").lower())
-            )
-            exact_coverage = len(query_terms & text_terms) / len(query_terms)
-
-            base = float(item.get("score", 0.0))
-            final_score = 0.7 * base + 0.3 * exact_coverage
-
+        for i, item in enumerate(results):
             updated = dict(item)
-            updated["initial_score"] = base
-            updated["rerank_score"] = final_score
-            updated["score"] = final_score
+            updated["initial_score"] = float(item.get("score", 0.0))
+            updated["rerank_score"] = float(scores[i])
+            updated["score"] = float(scores[i])
             reranked.append(updated)
 
         reranked.sort(key=lambda x: x["score"], reverse=True)

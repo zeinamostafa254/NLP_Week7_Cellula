@@ -80,6 +80,13 @@ class QueryRequest(BaseModel):
     max_loops: int = 3
 
 
+class ReportRequest(BaseModel):
+    question: str
+    design_instructions: str = ""
+    filters: Optional[Dict[str, Any]] = None
+    max_loops: int = 3
+
+
 class IngestResponse(BaseModel):
     status: str
     files_ingested: int
@@ -170,5 +177,34 @@ def query(request: QueryRequest):
         )
         logger.info(f"Query completed successfully. Confidence: {answer.confidence:.2f}")
         return answer
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+from document_ai.report.agent import ReportAgent
+
+@app.post("/export-report", tags=["Query"])
+def export_report(request: ReportRequest):
+    """
+    Run the full pipeline to get the answer, then use the ReportAgent
+    to design and generate a beautifully styled PDF report.
+    Returns the message containing the file path to the PDF.
+    """
+    if not request.question.strip():
+        logger.warning("Export called with empty question.")
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
+    logger.info(f"Received report request: '{request.question}'")
+    try:
+        orch = _get_orchestrator()
+        answer: FinalAnswer = orch.run(
+            question=request.question,
+            filters=request.filters,
+            max_loops=request.max_loops,
+        )
+        
+        report_agent = ReportAgent()
+        result_msg = report_agent.generate_report(answer, request.design_instructions)
+        
+        return {"status": "success", "message": result_msg}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

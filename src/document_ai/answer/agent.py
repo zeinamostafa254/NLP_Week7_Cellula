@@ -53,75 +53,23 @@ The final answer must:
 
 class AnswerAgent:
     """
-    Answer Agent using LangChain bind_tools.
+    Deterministic Answer Agent (No LLM Tool Calling).
 
     Usage:
         agent = AnswerAgent()
         final = agent.answer(question, analyst_result)
     """
 
-    MAX_TOOL_TURNS = 6
-
-    def __init__(self):
-        self._llm = get_llm().bind_tools(ANSWER_TOOLS)
-        self._tool_map = {t.name: t for t in ANSWER_TOOLS}
-
     def answer(self, question: str, analyst_result: AnalystResult) -> FinalAnswer:
-        # Build evidence JSON for the LLM
         evidence_dicts = [e.model_dump() for e in analyst_result.evidence_used]
-
-        import json
-        evidence_json = json.dumps(evidence_dicts)
         analysis_text = analyst_result.analysis or _fallback_analysis(analyst_result)
 
-        messages = [
-            SystemMessage(content=ANSWER_SYSTEM_PROMPT),
-            HumanMessage(
-                content=(
-                    f"Question: {question}\n\n"
-                    f"Analysis:\n{analysis_text}\n\n"
-                    f"Evidence (JSON):\n{evidence_json}\n\n"
-                    "Now produce the final answer using your tools."
-                )
-            ),
-        ]
-
-        final_answer_text = ""
-        citations_raw: list = []
-        sources_text = ""
-
-        for _ in range(self.MAX_TOOL_TURNS):
-            response: AIMessage = self._llm.invoke(messages)
-            messages.append(response)
-
-            if not response.tool_calls:
-                logger.info("    [Answer] LLM produced final text (no more tool calls).")
-                final_answer_text = response.content or final_answer_text
-                break
-
-            for tc in response.tool_calls:
-                logger.info(f"    [Answer] LLM called tool: '{tc['name']}'")
-                fn = self._tool_map.get(tc["name"])
-                result = fn.invoke(tc["args"]) if fn else "Tool not found."
-                messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-                if tc["name"] == "format_citations":
-                    try:
-                        citations_raw = json.loads(result)
-                    except Exception:
-                        pass
-                elif tc["name"] == "format_sources":
-                    sources_text = result
-                elif tc["name"] == "format_response":
-                    final_answer_text = result
-
-        # Fallback: build everything deterministically if LLM skipped tool calls
-        if not citations_raw:
-            citations_raw = build_citations(evidence_dicts)
-        if not sources_text:
-            sources_text = build_sources(citations_raw)
-        if not final_answer_text:
-            final_answer_text = assemble_response(analysis_text, citations_raw)
+        logger.info("    [Answer] Assembling response deterministically...")
+        
+        # Build everything deterministically
+        citations_raw = build_citations(evidence_dicts)
+        sources_text = build_sources(citations_raw)
+        final_answer_text = assemble_response(analysis_text, citations_raw)
 
         # Build pydantic Citation objects
         citations = [

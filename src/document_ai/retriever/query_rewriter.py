@@ -1,31 +1,30 @@
-import json
-
 from pydantic import BaseModel, Field
+import logging
 
-from document_ai.llm.model import get_llm, get_model_name
+from document_ai.llm.model import get_llm
 
+logger = logging.getLogger(__name__)
 
 class RewrittenQuery(BaseModel):
-    rewritten_query: str
-    keywords: list[str] = Field(default_factory=list)
-    metadata_filters: dict = Field(default_factory=dict)
+    """Schema for the rewritten query and extracted metadata."""
+    rewritten_query: str = Field(
+        description="A clear, concise, retrieval-friendly version of the user's question. Resolve pronouns using context, expand abbreviations, and preserve the original meaning."
+    )
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="List of important technical terms and keywords extracted from the query for exact-match searching."
+    )
+    metadata_filters: dict = Field(
+        default_factory=dict,
+        description="Any explicit metadata filters requested by the user, such as specific document names, authors, or dates."
+    )
 
 
 SYSTEM_PROMPT = """
 You are a query rewriting component in a document retrieval system.
 
 Your job is NOT to answer the user's question.
-
-Your job is to rewrite the user's question so that it is easier
-for a document retrieval system to search.
-
-Return ONLY valid JSON with this structure:
-
-{
-    "rewritten_query": "clear retrieval-friendly query",
-    "keywords": ["keyword1", "keyword2"],
-    "metadata_filters": {}
-}
+Your job is to rewrite the user's question so that it is easier for a document retrieval system to search.
 
 Rules:
 - Preserve the original meaning.
@@ -53,30 +52,20 @@ User question:
 {query}
 """
 
-    # We need to tell the model to return JSON. We can use bind() if supported, or just trust the system prompt.
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
 
-    response = client.invoke(messages)
-    content = response.content
-
     try:
-        # Sometimes LLMs wrap JSON in markdown blocks
-        clean_content = content.strip()
-        if clean_content.startswith("```json"):
-            clean_content = clean_content[7:]
-        if clean_content.startswith("```"):
-            clean_content = clean_content[3:]
-        if clean_content.endswith("```"):
-            clean_content = clean_content[:-3]
-            
-        data = json.loads(clean_content.strip())
-        return RewrittenQuery.model_validate(data)
-
-    except Exception:
-        # Safe fallback if the model does not return valid JSON.
+        # 1. Use LangChain's structured output parsing which handles JSON schema generation and validation
+        # 2. Because RewrittenQuery has detailed Field(description="...") it acts as the prompt!
+        structured_llm = client.with_structured_output(RewrittenQuery)
+        result = structured_llm.invoke(messages)
+        return result
+    except Exception as e:
+        logger.warning(f"Structured parsing failed, falling back: {e}")
+        # Safe fallback if the model fails
         return RewrittenQuery(
             rewritten_query=query,
             keywords=query.split(),
@@ -89,4 +78,4 @@ class QueryRewriter:
 
     def rewrite(self, query: str, conversation_context: str = "") -> str:
         result = rewrite_query(query, conversation_context)
-        return result.rewritten_query
+        return result.rewritten_query
