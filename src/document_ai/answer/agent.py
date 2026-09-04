@@ -13,6 +13,8 @@ Member 3 deliverable.
 from __future__ import annotations
 
 from typing import List
+import json
+import logging
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
@@ -24,7 +26,6 @@ from document_ai.answer.citation_formatter import build_citations, format_citati
 from document_ai.answer.source_formatter import build_sources, format_sources
 from document_ai.answer.response_formatter import assemble_response, format_response
 
-import logging
 logger = logging.getLogger(__name__)
 
 # All tools the Answer Agent LLM can call
@@ -53,23 +54,78 @@ The final answer must:
 
 class AnswerAgent:
     """
-    Deterministic Answer Agent (No LLM Tool Calling).
+    Answer Agent using LangChain bind_tools.
 
     Usage:
         agent = AnswerAgent()
         final = agent.answer(question, analyst_result)
     """
 
+    MAX_TOOL_TURNS = 6
+
+    def __init__(self):
+        self._llm = get_llm().bind_tools(ANSWER_TOOLS)
+        self._tool_map = {t.name: t for t in ANSWER_TOOLS}
+
     def answer(self, question: str, analyst_result: AnalystResult) -> FinalAnswer:
+        # Build evidence JSON for the LLM
         evidence_dicts = [e.model_dump() for e in analyst_result.evidence_used]
+        evidence_json = json.dumps(evidence_dicts)
         analysis_text = analyst_result.analysis or _fallback_analysis(analyst_result)
 
-        logger.info("    [Answer] Assembling response deterministically...")
-        
-        # Build everything deterministically
-        citations_raw = build_citations(evidence_dicts)
-        sources_text = build_sources(citations_raw)
-        final_answer_text = assemble_response(analysis_text, citations_raw)
+        logger.info("    [Answer] Assembling response via LLM Tool Calling...")
+
+        messages = [
+            SystemMessage(content=ANSWER_SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    f"Question: {question}\n\n"
+                    f"Analysis:\n{analysis_text}\n\n"
+                    f"Evidence (JSON):\n{evidence_json}\n\n"
+                    "Now produce the final answer using your tools."
+                )
+            ),
+        ]
+
+        final_answer_text = ""
+        citations_raw: list = []
+        sources_text = ""
+
+        # LLM Tool execution loop
+        for _ in range(self.MAX_TOOL_TURNS):
+            response: AIMessage = self._llm.invoke(messages)
+            messages.append(response)
+
+            if not response.tool_calls:
+                logger.info("    [Answer] LLM produced final text (no more tool calls).")
+                final_answer_text = response.content or final_answer_text
+                break
+
+            for tc in response.tool_calls:
+                logger.info(f"    [Answer] LLM called tool: '{tc['name']}'")
+                fn = self._tool_map.get(tc["name"])
+                result = fn.invoke(tc["args"]) if fn else "Tool not found."
+                messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+
+                if tc["name"] == "format_citations":
+                    try:
+                        citations_raw = json.loads(result)
+                    except Exception:
+                        pass
+                elif tc["name"] == "format_sources":
+                    sources_text = result
+                elif tc["name"] == "format_response":
+                    final_answer_text = result
+
+        # Fallback: if LLM failed to call tools properly, fallback to deterministic
+        if not citations_raw:
+            logger.warning("    [Answer] LLM failed to call format_citations. Using fallback.")
+            citations_raw = build_citations(evidence_dicts)
+        if not sources_text:
+            sources_text = build_sources(citations_raw)
+        if not final_answer_text:
+            logger.warning("    [Answer] LLM failed to call format_response. Using fallback.")
+            final_answer_text = assemble_response(analysis_text, citations_raw)
 
         # Build pydantic Citation objects
         citations = [
