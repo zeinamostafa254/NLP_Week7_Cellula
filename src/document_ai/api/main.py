@@ -8,6 +8,8 @@ Endpoints:
   POST /ingest                — upload & ingest one or more documents
   GET  /documents             — list ingested document names
   POST /query                 — full pipeline Q&A → FinalAnswer
+  POST /transcribe            — voice query: audio → transcribed text
+  POST /query/voice           — voice query: audio → FinalAnswer (transcribe + query chained)
 
 Member 3 deliverable.
 """
@@ -31,6 +33,7 @@ from document_ai.analyst.retrieve_more import set_retriever_callback
 from document_ai.answer.agent import AnswerAgent
 from document_ai.orchestrator.orchestrator import Orchestrator
 from document_ai.schemas.answer import FinalAnswer
+from document_ai.voice.transcriber import VoiceTranscriber
 from document_ai.logger import setup_logging
 import logging
 
@@ -73,6 +76,16 @@ def _get_orchestrator() -> Orchestrator:
     return _orch
 
 
+_transcriber: VoiceTranscriber | None = None
+
+
+def _get_transcriber() -> VoiceTranscriber:
+    global _transcriber
+    if _transcriber is None:
+        _transcriber = VoiceTranscriber()
+    return _transcriber
+
+
 # ── Request / Response models ──────────────────────────────────────────
 class QueryRequest(BaseModel):
     question: str
@@ -89,6 +102,13 @@ class IngestResponse(BaseModel):
 
 class DocumentListResponse(BaseModel):
     documents: List[str]
+
+
+class TranscriptionResponse(BaseModel):
+    text: str
+    language: str
+    language_probability: float
+    duration: float
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────
@@ -147,6 +167,80 @@ def list_documents():
     """List the filenames of all raw documents in the document store."""
     docs = sorted(p.name for p in RAW_DOCS_DIR.iterdir() if p.is_file())
     return DocumentListResponse(documents=docs)
+
+
+@app.post("/transcribe", response_model=TranscriptionResponse, tags=["Voice"])
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    language: Optional[str] = Query(
+        default=None,
+        description="Force a language code (e.g. 'en', 'ar'). Omit to auto-detect.",
+    ),
+):
+    """
+    Transcribe a recorded voice question (wav/mp3/m4a/webm/ogg) to text
+    using faster-whisper. The returned text can then be sent to
+    POST /query as-is, or edited by the user first.
+    """
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="No audio data received.")
+
+    logger.info(f"Transcribing voice query: {file.filename} ({len(audio_bytes)} bytes)")
+    try:
+        transcriber = _get_transcriber()
+        result = transcriber.transcribe(
+            audio_bytes, filename=file.filename or "audio.wav", language=language
+        )
+        if not result.text:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not detect any speech in the recording.",
+            )
+        return TranscriptionResponse(
+            text=result.text,
+            language=result.language,
+            language_probability=result.language_probability,
+            duration=result.duration,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Transcription failed.")
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
+
+
+@app.post("/query/voice", response_model=FinalAnswer, tags=["Voice"])
+async def query_voice(
+    file: UploadFile = File(...),
+    max_loops: int = Query(default=3),
+    language: Optional[str] = Query(default=None),
+):
+    """
+    Convenience endpoint that chains transcription + the full Q&A
+    pipeline in one call: audio in, FinalAnswer out. Prefer calling
+    /transcribe then /query separately if you want to show the user
+    the transcribed text before running the (slower) full pipeline.
+    """
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="No audio data received.")
+
+    transcriber = _get_transcriber()
+    transcription = transcriber.transcribe(
+        audio_bytes, filename=file.filename or "audio.wav", language=language
+    )
+    if not transcription.text:
+        raise HTTPException(
+            status_code=422, detail="Could not detect any speech in the recording."
+        )
+
+    logger.info(f"Voice query transcribed to: '{transcription.text}'")
+    orch = _get_orchestrator()
+    answer: FinalAnswer = orch.run(
+        question=transcription.text, filters=None, max_loops=max_loops
+    )
+    return answer
 
 
 @app.post("/query", response_model=FinalAnswer, tags=["Query"])
