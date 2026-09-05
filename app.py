@@ -22,7 +22,6 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 import streamlit as st
-from streamlit_mic_recorder import mic_recorder
 
 # ── Config ─────────────────────────────────────────────────────────────
 API_BASE = "http://127.0.0.1:8000"
@@ -73,13 +72,6 @@ def _list_docs() -> List[str]:
         return r.json().get("documents", [])
     except Exception:
         return []
-
-
-def _transcribe(audio_bytes: bytes) -> Dict[str, Any]:
-    files = {"file": ("query.wav", audio_bytes, "audio/wav")}
-    r = httpx.post(f"{API_BASE}/transcribe", files=files, timeout=60)
-    r.raise_for_status()
-    return r.json()
 
 
 # ── Sidebar ─────────────────────────────────────────────────────────────
@@ -183,9 +175,10 @@ with tab_chat:
             cols[1].metric("Evidence chunks", meta.get("evidence_count", "—"))
             cols[2].metric("Retrieval loops", meta.get("iterations", "—"))
 
-    def _process_question(question: str) -> None:
-        """Send a question (typed or transcribed) through the Q&A pipeline
-        and render the answer + append it to chat history."""
+    # Input
+    question = st.chat_input("Ask a question about your documents…")
+
+    if question:
         with st.chat_message("user"):
             st.markdown(question)
 
@@ -238,49 +231,6 @@ with tab_chat:
                     st.error("Cannot reach the API — is the FastAPI server running?")
                 except Exception as e:
                     st.error(f"Unexpected error: {e}")
-
-    # ── Voice input ──────────────────────────────────────────────────
-    with st.expander("🎤 Ask by voice", expanded=False):
-        audio = mic_recorder(
-            start_prompt="🔴 Start recording",
-            stop_prompt="⏹️ Stop recording",
-            just_once=True,
-            format="wav",
-            key="voice_recorder",
-        )
-
-        if audio and audio.get("bytes"):
-            with st.spinner("Transcribing…"):
-                try:
-                    result = _transcribe(audio["bytes"])
-                    st.session_state.voice_transcript = result["text"]
-                except httpx.HTTPStatusError as e:
-                    detail = e.response.json().get("detail", str(e))
-                    st.error(f"Transcription failed: {detail}")
-                except httpx.ConnectError:
-                    st.error("Cannot reach the API — is the FastAPI server running?")
-                except Exception as e:
-                    st.error(f"Unexpected error: {e}")
-
-        if st.session_state.get("voice_transcript"):
-            edited = st.text_area(
-                "Transcribed question — edit if needed, then send:",
-                value=st.session_state.voice_transcript,
-                key="voice_transcript_edit",
-            )
-            col_send, col_discard = st.columns([1, 1])
-            if col_send.button("➤ Send", type="primary", key="send_voice_question"):
-                st.session_state.pop("voice_transcript", None)
-                _process_question(edited)
-            if col_discard.button("✕ Discard", key="discard_voice_question"):
-                st.session_state.pop("voice_transcript", None)
-                st.rerun()
-
-    # ── Text input ───────────────────────────────────────────────────
-    question = st.chat_input("Ask a question about your documents…")
-
-    if question:
-        _process_question(question)
 
     if st.session_state.chat_history:
         if st.button("🗑️ Clear chat history"):
